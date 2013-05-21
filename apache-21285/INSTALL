@@ -1,0 +1,163 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.0.46
+
+This is an atomicity violation bug (data race free).
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL APACHE                                   |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download httpd-2.0.46 source code
+-------------------------------------------------
+
+# tar zxf httpd-2.0.46.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <httpd-src-base>
+# patch -p1 -i apache-21285.patch
+
+(The patch is used to allow caching for CGI request when
+query string present but no expires header (RFC 2616/13.9).
+This allows us to generate more cachable objects without
+creating many CGI scripts.) 
+
+
+3. Configure
+-------------------------------------------------
+
+# cd <httpd-src-base>
+# ./configure --prefix=<httpd-install-dir> --with-mpm=worker --enable-cache -enable-mem-cache
+
+
+3. Compile and install
+-------------------------------------------------
+
+If you want to compile apache-2.0.46 on x86_64 machines,
+you need to modify some files to make it compilable.
+
+1) srclib/apr/include/apr.h +242
+
+Change '#define APR_HAVE_SCTP 1' to '#define APR_HAVE_SCTP 0'
+
+2) srclib/apr-util/include/apr_optional.h +113
+
+Change 'APR_OPTIONAL_FN_TYPE(name) *' to 'apr_opt_fn_t *'
+
+3) srclib/apr-util/include/apr_optional_hooks.h +103
+
+Change 'ns##_HOOK_##name##_t *' to 'void (*)(void)'
+
+After that,
+
+# make
+# make install
+
+(If you meet problem with libexpact.so, make sure to use
+64-bit version of libexpact.so)
+
+4. Post-install configuration
+-------------------------------------------------
+
+Open <httpd-install-dir>/conf/httpd.conf
+
+Add the following lines to the conf file:
+
+<IfModule mod_cache.c>
+<IfModule mod_mem_cache.c>
+  CacheEnable mem /
+  CacheDefaultExpire 1000
+  CacheMaxExpire 3000
+  CacheIgnoreCacheControl Off
+  CacheIgnoreNoLastMod    On
+  MCacheSize  1
+  MCacheMaxObjectCount 10
+  MCacheMinObjectSize  1
+  MCacheMaxObjectSize  300
+  MCacheMaxStreamingBuffer 200
+</IfModule>
+</IfModule>
+
+Also, modify the following lines:
+
+<IfModule worker.c>
+StartServers         1
+MaxClients          64
+MinSpareThreads      1
+MaxSpareThreads     64
+ThreadsPerChild     64
+MaxRequestsPerChild  0
+ServerLimit          1
+</IfModule>
+
+After that, copy 'trigger.cgi' to cgi-bin directory
+
+# cp trigger.cgi <httpd-install-dir>/cgi-bin
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start apache server
+-------------------------------------------------
+
+# cd <httpd-install-dir>
+# bin/apachectl start
+
+
+2. Trigger bug
+-------------------------------------------------
+
+Run the prepared scripts concurrently.
+
+console0:
+# ./trigger-con0.sh 0
+
+console1:
+# ./trigger-con1.sh 0
+
+console2:
+# ./trigger-con2.sh 0
+
+
+3. Check result
+-------------------------------------------------
+
+Check the '<httpd-install-dir>/logs/error_log' file. If the
+bug is triggered, you will see the error message like this:
+
+bc detected *** /opt/apache/httpd-2.0.46/bin/httpd: munmap_chunk(): invalid pointer: 0x00000000089effe0 ***
+======= Backtrace: =========
+/lib64/libc.so.6(cfree+0x1b6)[0x3dfe0720e6]
+/opt/apache/httpd-2.0.46/bin/httpd[0x42972d]
+/opt/apache/httpd-2.0.46/bin/httpd(cache_insert+0x9d)[0x42acfd]
+/opt/apache/httpd-2.0.46/bin/httpd[0x42a829]
+/opt/apache/httpd-2.0.46/bin/httpd(cache_run_create_entity+0xb3)[0x428043]
+/opt/apache/httpd-2.0.46/bin/httpd(cache_create_entity+0xc4)[0x428894]
+/opt/apache/httpd-2.0.46/bin/httpd[0x427749]
+/opt/apache/httpd-2.0.46/bin/httpd[0x451fd2]
+/opt/apache/httpd-2.0.46/bin/httpd(ap_run_handler+0x7a)[0x46c02a]
+/opt/apache/httpd-2.0.46/bin/httpd(ap_invoke_handler+0x72)[0x46ee72]
+/opt/apache/httpd-2.0.46/bin/httpd(ap_process_request+0xde)[0x43eb8e]
+/opt/apache/httpd-2.0.46/bin/httpd[0x439ca0]
+/opt/apache/httpd-2.0.46/bin/httpd(ap_run_process_connection+0x72)[0x477212]
+/opt/apache/httpd-2.0.46/bin/httpd[0x469d6f]
+/lib64/libpthread.so.0[0x3dfec061b5]
+/lib64/libc.so.6(clone+0x6d)[0x3dfe0cd39d]
+======= Memory map: ========
+[Sat Jun 19 11:07:15 2010] [notice] child pid 11331 exit signal Aborted (6)
+[Sat Jun 19 11:07:18 2010] [notice] child pid 14313 exit signal Segmentation fault (11)
+
+(LogLevel debug is used)

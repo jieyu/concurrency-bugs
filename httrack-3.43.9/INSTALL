@@ -1,0 +1,89 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in HTTrack-3.43.9
+
+This is a an order violation concurrency bug.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download httrack-3.43.9 source code
+-------------------------------------------------
+
+# tar zxf httrack-3.43.9.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <httrack_src_dir>
+# patch -p1 -i httrack-3.43.9.patch
+
+(This patch is used to increase the likeihood of treggering
+the bug)
+
+
+3. Configure Apache
+-------------------------------------------------
+
+# cd <httrack_src_dir>
+# ./configure --prefix=<httrack_install_dir>
+
+
+4. Compile and install
+-------------------------------------------------
+
+# make
+# make install
+
+
+5. Post-install configuration
+-------------------------------------------------
+
+Modify <httrack_install_dir>/bin/webhttrack script.
+line 20: + SRCHPATH="<httrack_install_dir>/bin"
+line 22: + SRCHDISTPATH="<httrack_install_dir>/share"
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start htsserver server
+-------------------------------------------------
+
+# cd <httrack-install-dir>
+# bin/htsserver <httrack_install_dir>/share/httrack
+
+
+2. Run webhttrack
+-------------------------------------------------
+
+# bin/webhttrack
+
+
+3. Trigger bug
+-------------------------------------------------
+
+In the browser, fill in "New project name"
+                        "base path"
+		        "Web Addresses"
+After clicking 'Start', and immediately click 'Skip' button
+(be quick).
+
+
+4. Check result
+-------------------------------------------------
+
+When the bug is triggered,  htsserver would crash and throw
+out "segmentation fault".
+

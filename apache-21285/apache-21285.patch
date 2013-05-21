@@ -1,0 +1,12 @@
+diff -Naur httpd-2.0.46-src-ori/modules/experimental/mod_cache.c httpd-2.0.46-src/modules/experimental/mod_cache.c
+--- httpd-2.0.46-src-ori/modules/experimental/mod_cache.c	2010-06-19 17:01:52.000000000 -0400
++++ httpd-2.0.46-src/modules/experimental/mod_cache.c	2010-06-19 17:02:32.000000000 -0400
+@@ -531,7 +531,7 @@
+         /* if query string present but no expiration time, don't cache it
+          * (RFC 2616/13.9)
+          */
+-        reason = "Query string present but no expires header";
++        // reason = "Query string present but no expires header";
+     }
+     else if (r->status == HTTP_NOT_MODIFIED && (NULL == cache->handle)) {
+         /* if the server said 304 Not Modified but we have no cache

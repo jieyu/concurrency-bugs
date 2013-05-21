@@ -1,0 +1,279 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-5.0.11-beta
+
+This is an atomicity violation bug (data race free).
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://bugs.mysql.com/bug.php?id=12228
+
+<<<<< Overview >>>>>
+
+This bug occurs when one thread deletes a stored routine
+while another thread is executing a routine (either the same
+or a different routine), the server could crash. The main
+cause of the bug is that the atomicity assumption between
+the lookup and the use of the procedure cache is not hold. A
+version based procedure cache update protocol breaks the
+privacy of each thread's procedure cache.
+
+Although this bug is a single-variable atomicity violation
+bug, it is very context sensitive. Therefore, context
+insensitive tools will not be able to detect this bug.
+
+<<<<< Details >>>>>
+
+sql/sql_parse.cc: line 2241
+
+bool mysql_execute_command(THD *thd)
+{
+  ...
+  switch (lex->sql_command) {
+    ...
+    case SQLCOM_CALL:
+      sp_head *sp;
+      ...
+      if (... || open_and_lock_tables(thd, ...))
+        goto error;
+      ...
+      if (!(sp = sp_find_procedure(thd, lex->spname, TRUE))) {
+        ...
+        goto error;
+      } else {
+        ...
+        res = sp->execute_procedure(thd, ...);
+        ...
+      }
+      break;
+    ...
+    case SQLCOM_DROP_PROCEDURE:
+      sp_head *sp;
+      ...
+      sp= sp_find_procedure(thd, lex->spname);
+      ...
+      if (sp) {
+        ...
+        result = sp_drop_procedure(thd, lex->spname);
+      }
+      ...
+      break;
+    ...
+  }
+}
+
+This function is called each time a command is being
+executed. In this bug, we consider two types of command:
+call procedure and drop procedure. If the command is call
+procedure, the mysql server will preload all the procedures
+and tables affected (in 'open_and_lock_tables' function).
+Then, the server lookups the procedure cache (a precedure
+cache is maintained for each thread. Refer to
+thd->sp_proc_cache) to get the cached procedure, and then
+calls its 'execute_procedure' method to execute the
+procedure. If the procedure being called contains another
+call procedure instruction, the 'mysql_execute_command'
+function will be called again (actually nested in its parent
+'mysql_execute_command').
+
+sql/sp.cc: line 915
+
+sp_head *sp_find_procedure(THD *thd, sp_name *name, ...)
+{
+  sp_head *sp;
+  ...
+  if (!(sp = sp_cache_lookup(&thd->sp_proc_cache, name)) && ...) {
+    if (db_find_routine(thd, name, ...) == SP_OK)
+      sp_cache_insert(&thd->sp_proc_cache, sp);
+  }
+
+  return sp;
+}
+
+sql/sp_cache.cc: line 72
+
+sp_head *sp_cache_lookup(sp_cache **cp, sp_name *name)
+{
+  ...
+  pthread_mutex_lock(&Cversion_lock);
+  v= Cversion;
+  pthread_mutex_unlock(&Cversion_lock);
+  
+  if (c->version < v) {
+    c->remove_all();
+    c->version= v;
+    return NULL;
+  }
+  return c->lookup(...);
+}
+
+sql/sp_cache.cc: line 45
+
+void sp_cache_insert(sp_cache **cp, sp_head *sp)
+{
+  sp_cache *c = *cp;
+  ...
+  ulong v;
+
+  pthread_mutex_lock(&Cversion_lock);
+  v = Cversion;
+  pthread_mutex_unlock(&Cversion_lock);
+  
+  if (c->version < v) {
+    ...
+    c->remove_all();
+    c->version = v;
+  }
+  c->insert(sp);
+  ...
+}
+
+sql/sp_head.cc: line 848
+
+int sp_head::execute_procedure(THD *thd, ...)
+{
+  ...
+  ret = execute(thd);
+  ...
+}
+
+sql/sp_head.cc: line 595
+
+int sp_head::execute(THD *thd)
+{
+  ...
+  do {
+    sp_instr *i;
+    ...
+    ret = i->execute(thd, &ip);
+    ...
+  } while (ret == 0 && !thd->killed);
+  ...
+}
+
+The 'i->execute' function will invoke the
+'mysql_execute_command' function finally. Therefore, the
+entire call chain is like the following:
+
+mysql_execute_command
+  |
+  |---> sp_find_procedure
+  |       |
+  |       |---> sp_cache_lookup
+  |       |
+  |       |---> db_find_routine
+  |       |
+  |       |---> sp_cache_insert
+  |
+  |---> sp->execute_procedure
+          |
+          |---> sp->execute
+                  |
+                  |---> i->execute
+                          |
+                          |---> mysql_execute_command
+
+
+----------
+
+sql/sp.cc: line 985
+
+int sp_drop_procedure(THD *thd, sp_name *name)
+{
+  int ret;
+  bool found;
+  ...
+  found = sp_cache_remove(&thd->sp_proc_cache, name);
+  ret = db_drop_routine(thd, ..., name);
+  if (!found && !ret)
+    sp_cache_invalidate();
+
+  return ret;
+}
+
+sql/sp_cache.cc: line 94
+
+bool sp_cache_remove(sp_cache **cp, sp_name *name)
+{
+  sp_cache *c = *cp;
+  bool found = FALSE;
+  ...
+  ulong v;
+  
+  pthread_mutex_lock(&Cversion_lock);
+  v = Cversion++;
+  pthread_mutex_unlock(&Cversion_lock);
+
+  if (c->version < v)
+    c->remove_all();
+  else
+    found = c->remove(...);
+  c->version = v+1;
+  ...
+  return found;
+}
+
+sql/sp_cache.cc: line 117
+
+void sp_cache_invalidate()
+{
+  pthread_mutex_lock(&Cversion_lock);
+  Cversion++;
+  pthread_mutex_unlock(&Cversion_lock);
+}
+
+While one thread is calling a stored procedure, another
+thread could drop some procedures (not necessarily to be the
+same procedure). The function 'sp_drop_procedure' will be
+called. It remove the procedure from the cache and drop it
+from the routine table. The function 'sp_cache_remove' will
+increment the global variable 'Cversion' by 1. This will
+cause all the other caches in other threads refresh their
+procedure caches, including the one that is executing a
+stored procedure, leading to a crash.
+
+----------
+
+<<<<< Buggy Interleaving >>>>>
+
+Thread 1                                 Thread 2
+
+mysql_execute_command(...)               mysql_execute_command(...)
+{                                        {
+  ...
+  sp_cache_insert(...) {
+    ...
+    lock(&Cversion_lock);
+    v = Cversion;
+    unlock(&Cversion_lock);
+    ...
+  }                                        sp_cache_remove(...) {
+                                             ...
+                                             lock(&Cversion_lock);
+  ...                                        Cversion++;
+  sp_head::execute_procedure(...) {          unlock(&Cversion_lock);
+    ...                                      ...
+    mysql_execute_command(...) {           }
+      ...
+      sp_cache_lookup(...) {
+        ...
+        lock(&Cversion_lock);
+        v = Cversion;
+        unlock(&Cversion_lock);
+        ...
+      }
+    }
+    ...    
+  }
+}                                        }
+

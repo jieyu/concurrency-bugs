@@ -1,0 +1,138 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Cherokee-0.9.2.
+
+This is a data race and also an atomicity violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Cherokee is a light-weight, hign-performance and open-source
+Cross-platform Web server. This bug has never been studied
+in the literature before.
+
+<<<<< Overview >>>>>
+
+The bug is because of a data race on the log buffer. The
+function 'cherokee_logger_write_string' does not properly
+protect the write to the log buffer, causing a corrupted log
+file.
+
+<<<<< Details >>>>>
+
+When the web server serving a request, it will call function
+'check_cached' to check whether the content is cached on the
+client.
+
+cherokee/handle_file.c (line 149)
+
+static ret_t
+check_cached (cherokee_handler_file_t *fhdl)
+{
+  ...
+  ret = cherokee_header_get_known(&conn->header,
+                                  header_if_modified_since,
+                                  &header, &header_len);
+  if (ret == ret_ok) {
+    ...
+    req_time = cherokee_dtm_str2time(header);
+    if (unlikely(req_time == DTM_TIME_EVAL)) {
+      cherokee_logger_write_string (
+          CONN_VSRV(conn)->logger,
+          "Warning: Unparseable time '%s'",
+          header);
+      ...
+    }
+  }
+  ...
+} 
+
+The function will check the 'If-Modified-Since' field in
+the http request header. The function
+'cherokee_dtm_str2time' will convert the header string. If
+the header string is invalid (e.g. invalid date), the
+server will write a warning message to the log file.
+
+cherokee/logger.c (line 155)
+
+ret_t 
+cherokee_logger_write_string (...)
+{
+  va_list ap;
+
+  if (logger == NULL)
+    return ret_ok;
+
+  if (logger->write_string) {
+    ret_t ret;
+    cherokee_buffer_t tmp = CHEROKEE_BUF_INIT;
+
+    CHEROKEE_MUTEX_LOCK(&PRIV(logger)->mutex);
+    va_start (ap, format);
+    cherokee_buffer_add_va_list (&tmp, (char *)format, ap);
+    va_end (ap);
+    CHEROKEE_MUTEX_UNLOCK(&PRIV(logger)->mutex);
+
+    ret = logger->write_string (logger, tmp.buf);
+
+    cherokee_buffer_mrproper (&tmp);
+    return ret;
+  }
+
+  return ret_error;
+}
+
+The function 'cherokee_logger_write_string' will append the
+warning message to the log file. I believe the intention of
+the programmer is to protect 'logger->write_string(...)'
+using 'PRIV(logger)->mutex'. However, the lock is falsely
+used to protect an update to a local buffer, leaving the
+function 'logger->write_string' being unprotected. This
+causes a data race to the log buffer.
+
+The log buffer is updated using function
+'cherokee_buffer_add'.
+
+cherokee/buffer.c (line 170)
+
+ret_t
+cherokee_buffer_add (cherokee_buffer_t *buf, ...)
+{
+  ...
+  memcpy (buf->buf + buf->len, txt, size);
+
+  buf->len += size;
+  buf->buf[buf->len] = '\0';
+
+  return ret_ok;
+}
+
+Since there exists a data race on the log buffer, it is
+likely that the update to 'buf->len' and memory copy are
+not atomic, leading to a corruption in the log file. The
+buggy interleaving is shown below:
+
+
+Thread 1                         Thread 2
+
+cherokee_buffer_add(...) {       cherokee_buffer_add(...) {
+  ...                              ... 
+  memcpy(buf->buf + buf->len,      memcpy(buf->buf + buf->len,
+         txt, size);                      txt, size);
+
+
+                                   buf->len += size;
+                                   buf->buf[buf->len] = '\0';
+
+  buf->len += size;
+  buf->buf[buf->len] = '\0';
+}                                }
+

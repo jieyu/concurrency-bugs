@@ -1,0 +1,117 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A deadlock bug in aget-devel due to asynchronous thread
+cancellation.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+This is a deadlock bug due to asynchronous thread
+cancellation. This bug is never studied in the literature
+before, and is very hard to reproduce even if delays are
+injected in the program. (It will become easier to
+reproduce if one can inject delays in glibc functions,
+which is not an option if source code is not available.)
+
+The bug happens when the download is completed. The main
+thread will cancel the signal handler thread:
+
+Aget.c (line 47, line 182)
+
+void startHTTP(struct request *req)
+{
+  ...
+  if (nok == nthreads) {
+    /* Block out all signals */
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+    pthread_cancel(hthread);
+  }
+  ...
+  Log("Download completed, job completed in %d seconds. (%d Kb/sec)",
+      diff_sec, (req->clength / diff_sec) / 1024);
+
+  Log("Shutting down...");
+  close(fd);
+}
+
+The main thread invoke 'pthread_cencel(hthread)' to cancel
+the signal handler thread. Since the signal handler thread
+sets its cancel type to 'asynchronous', it is likely that
+it is cancelled when it is holding a lock.
+
+Signal.c (line 30)
+
+void *signal_waiter(void *arg)
+{
+  ...
+  /* Set Cancellation Type to Asynchronous */
+  pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+  ...
+  while(1) {
+    sigwait(&set, &signal);
+    switch(signal) {
+      case SIGINT:
+        sigint_handler();
+        break;
+      case SIGALRM:
+        sigalrm_handler();
+        break;
+    }
+  }
+}
+
+void sigalrm_handler(void)
+{
+  updateProgressBar();
+  alarm(1);
+}
+
+Misc.c (line 220)
+
+void updateProgressBar()
+{
+  ...
+  fflush(stdout);
+}
+
+For example, the signal handler might be handling an
+SIGALARM signal when it gets cancelled. It might be holding
+the internal stdio lock in function 'fflush'. If that
+happens, the main thread will get stuck when it is trying
+to print a message to the screen. (try to get the same
+stdio lock).
+
+The buggy interleaving is like the following:
+
+Thread 1                               Thread 2
+
+void startHTTP(...)                    void *signal_waiter(...)
+{                                      {
+  .                                      ...
+                                         sigalrm_handler()
+                                         {
+                                           updateProgressBar()
+                                           {
+                                             ...
+                                             fflush(...)
+                                             {
+                                               lock(&some_io_lock);
+  ...
+  pthread_cancel(hthread);
+  ...
+  LOG(...)
+  {
+    lock(&some_io_lock);
+    ...
+  }
+  ...
+}                                      }             
+

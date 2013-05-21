@@ -1,0 +1,152 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-4.0.26
+
+This is a data race (also multi-var atomicity violation).
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://bugs.mysql.com/bug.php?id=12848
+
+<<<<< Overview >>>>>
+
+This bug occurs when a thread is performing cache resizing
+while the other thread is storing sql queries into the same
+cache. The cache resizing (in function 'resize') is not
+atomic, making it possible for other threads to read an
+intermediate state, leading to a crash.
+
+<<<<< Details >>>>>
+
+sql/sql_cache.cc: line 726
+
+ulong Query_cache::resize(ulong query_cache_size_arg)
+{
+  ...
+  free_cache(0);
+  query_cache_size = query_cache_size_arg;
+  DBUG_RETURN(::query_cache_size= init_cache());
+}
+
+The main cause of this bug is because resize is not atomic.
+Therefore, it is possible that the intermediate status
+('query_cache_size = query_cache_size_arg;') is read by
+other threads, leading to a crash.
+
+sql/sql_cache.cc: line 1512
+
+void Query_cache::free_cache(my_bool destruction)
+{
+  ...
+  if (query_cache_size > 0) {
+    if (!destruction)
+      STRUCT_LOCK(&structure_guard_mutex);
+    
+    flush_cache();
+    ...
+    make_disabled();
+    ...
+    if (!destruction)
+      STRUCT_UNLOCK(&structure_guard_mutex);
+  }
+  ...
+}
+
+sql/sql_cache.cc: line 1497
+
+void Query_cache::make_disabled()
+{
+  ...
+  query_cache_size= 0;
+  ...
+}
+
+----------
+
+sql/sql_cache.cc: line 737
+
+void Query_cache::store_query(...)
+{
+  ...
+  STRUCT_LOCK(&structure_guard_mutex);
+
+  if (query_cache_size == 0) {
+    STRUCT_UNLOCK(&structure_guard_mutex);
+    return;
+  }
+  ...
+  query_block= write_block_data(...);
+  ...
+  STRUCT_UNLOCK(&structure_guard_mutex);
+  ...
+}
+
+This function checks 'query_cache_size'. If it does not
+equal to zero, the function will call 'write_block_data' to
+store the query into the cache. At this time, the code
+assumes that the cache is not empty. However, a temp value
+could be read (when resizing is in progress), leading to a
+crash in 'write_block_data' function.
+
+sql/sql_cache.cc: line 1675
+
+Query_cache_block *Query_cache::write_block_data(...)
+{
+  ...
+  Query_cache_block *block = allocate_block(...);
+  ...
+}
+
+sql/sql_cache.cc: line 2137
+
+Query_cache_block *Query_cache::allocate_block(...)
+{
+  ...
+  do {
+    block= get_free_block(len, not_less, min);
+  } while (block == 0 && !free_old_query());
+  ...
+}
+
+
+----------
+
+<<<<< Buggy Interleaving >>>>>
+
+Thread 1                                Thread 2
+
+ulong resize(ulong arg)                 void store_query(...)
+{                                       {
+  ...
+  free_cache(0) { 
+    ...
+    lock(&guard_mutex);
+    ...
+    query_cache_size = 0;
+    ...
+    unlock(&guard_mutex);
+    ...
+  }
+  query_cache_size = arg;
+
+                                          lock(&guard_mutex);
+                                          ...
+                                          if (query_cache_size == 0) {}
+                                          ...
+                                          write_block_data(...);
+                                          ...
+                                          unlock(&guard_mutex);
+
+  query_cache_size= init_cache();
+}                                       }
+

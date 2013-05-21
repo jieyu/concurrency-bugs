@@ -1,0 +1,219 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.0.46
+
+This is an atomicity violation bug (data race free).
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://issues.apache.org/bugzilla/show_bug.cgi?id=21285
+
+Or, you can refer to the following paper:
+
+"Weeratunge, D., Zhang, X., and Jagannathan, S. 2010.
+Analyzing multicore dumps to facilitate concurrency bug
+reproduction, ASPLOS 2010."
+
+<<<<< Overview >>>>>
+
+The bug is in 'mod_mem_cache' module, which is used to
+cache dynamic objects. The module works as follows: the
+dynamically generated objects are first inserted in the
+cache as temporary objects with a default size (in function
+'create_entity'). Later, the object will be resized once the
+actual size is available. To resize the temporary object,
+the module first removes it from the hash table and then
+re-inserts it with its correct size (in function
+'write_body'). The temporary object is supposed to be in the
+cache when resizing happens. However, it is possible that
+the temporary object is removed from the cache due to
+capacity reason (in function 'cache_insert'). If that
+happens, the size of the cache could be a negative number
+and finally crash the server.
+
+<<<<< Details >>>>>>
+
+modules/experimental/mod_mem_cache.c: line 437
+
+int create_entity(cache_handle_t *h, ...)
+{
+  cache_object_t *obj;
+  ...
+  obj = calloc(1, sizeof(*obj));
+  ...
+  obj->refcount = 1;
+  ...
+  apr_thread_mutex_lock(sconf->lock);
+  ...
+  cache_insert(sconf->cache_cache, obj);
+  ...
+  apr_thread_mutex_unlock(sconf->lock);
+  ...
+  h->cache_obj = obj;
+  ...
+}
+
+In 'create_entity', a temporary cache_object_t is created.
+The reference count is set to 1. It is inserted into a hash
+table by invoking 'cache_insert' function.
+
+----------
+
+modules/experimental/mod_mem_cache.c: line 907
+
+apr_status_t write_body(cache_handle_t *h, ...)
+{
+  cache_object_t *obj = h->cache_obj;
+  mem_cache_object_t *mobj = (mem_cache_object_t*) obj->vobj;
+  ...
+  apr_thread_mutex_lock(sconf->lock);
+  cache_remove(sconf->cache_cache, obj);
+  mobj->m_len = obj->count;
+  cache_insert(sconf->cache_cache, obj);
+  ...
+  apr_thread_mutex_unlock(sconf->lock);
+  ...
+}
+
+In 'write_body', the temporary object will be removed from
+the hash table and the resized object will be re-inserted
+into the hash table.
+
+modules/experimental/cache_cache.c: line 201
+
+apr_status_t cache_remove(cache_cache_t *c, void *entry)
+{
+    apr_size_t entry_size = c->size_entry(entry);
+    apr_status_t rc;
+    rc = cache_pq_remove(c->pq, entry);
+    if (rc != APR_SUCCESS)
+        return rc;
+
+    cache_hash_set(c->ht, c->key_entry(entry), CACHE_HASH_KEY_STRING, NULL);
+    c->current_size -= entry_size;
+
+    return APR_SUCCESS;
+}
+
+In function 'cache_remove', the object will be removed from
+the hash table. Notice that the object is not deallocated.
+The statement 'c->current_size -= entry_size;' is the cause
+of negative cache size. To understand further, look at
+function 'cache_insert' first.
+
+---------
+
+modules/experimental/cache_cache.c: line 150
+
+void cache_insert(cache_cache_t* c, void *entry)
+{
+    void *ejected = NULL;
+
+    ...
+    while (... || ((c->current_size + c->size_entry(entry)) > c->max_size)) {
+        // cache size exceeds limit, release object from
+        // hash table (refer to priority queue)
+
+        ejected = cache_pq_pop(c->pq);
+
+        // remove from hash table
+        cache_hash_set(c->ht,
+                       c->key_entry(ejected),
+                       CACHE_HASH_KEY_STRING,
+                       NULL);
+
+        c->current_size -= c->size_entry(ejected);
+
+        // deallocate the cache object
+        c->free_entry(ejected);
+    }
+    c->current_size += c->size_entry(entry);
+
+    // insert into hash table
+    cache_hash_set(c->ht, c->key_entry(entry), CACHE_HASH_KEY_STRING, entry);
+}
+
+Function 'cache_insert' first check whether there are
+enough space for the new object. If not, it will choose an
+object (the 'ejected') to release. Notice that the object
+will be deallocated. 'c->free_entry' will invoke
+'memcache_cache_free'.
+
+modules/experimental/mod_mem_cache.c: line 205
+
+void memcache_cache_free(void*a)
+{
+    cache_object_t *obj = (cache_object_t *)a;
+
+    apr_atomic_inc(&obj->refcount);
+
+    obj->cleanup = 1;
+
+    if (!apr_atomic_dec(&obj->refcount)) {
+        cleanup_cache_object(obj);
+    }
+}
+
+This function will decrease the reference count on the cache
+object and deallocate the object if reference count reach
+zero.
+
+When 'cache_insert' invokes 'c->free_entry' to deallocate
+the temporary object, the reference count of it is not zero
+since there is a reference from cache_handle to this object.
+Therefore, the object will not be deallocated at this time.
+However, the size of the temporary object is removed from
+the current_size in 'cache_insert'. When 'cache_remove' is
+called again in 'write_body' for the temporary object, we
+actually decrease the size twice, causing negative cache
+size and later crashing the server. One thing to mention is
+that the 'cache_removed' called from 'write_body' will do
+nothing and cause silient problem in 'cache_pq_remove'
+since the object is already removed from the hash table and
+priority queue.
+
+----------
+
+
+<<<<< Buggy Interleaving >>>>>
+
+
+Thread 1                          Thread 2
+
+int create_entity(...)
+{
+  ...                             
+  lock(sconf->lock);
+  cache_insert(..., obj);
+  unlock(sconf->lock);
+  ...                             lock(sconf->lock);
+                                  ...
+}                                 void cache_insert(...)
+                                  {
+                                    obj = cache_pq_pop(c->pq);
+                                    ...
+                                    cache_hash_set(...); // remove from hash table
+                                    c->current_size -= c->size_entry(obj);
+int write_body(...)                 c->free_entry(obj);
+{                                   ...
+                                  }
+                                  ...
+                                  unlock(sconf->lock);
+  ...                               
+  lock(sconf->lock);
+  cache_remove(..., obj);
+  ...
+  cache_insert(..., obj);
+  unlock(sconf->lock);
+  ...
+}

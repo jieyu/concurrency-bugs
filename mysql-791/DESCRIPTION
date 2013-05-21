@@ -1,0 +1,80 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-4.0.12
+
+This is a data race and atomicity violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at
+http://bugs.mysql.com/bug.php?id=791
+
+This bug is caused by one thread's write-write access pair
+interleaved by another thread's read access. As a result,
+the read access mistakenly gets an intermediate value and
+leads to program misbehavior. 
+
+The bug is in sql/log.cc. Thread 1 is in the process of
+close the old database bin-log and open the new one,
+during this period bin-log status is temporarily set to
+CLOSE; thread 2 needs to log the latest database action
+into the binlog, however, itreads the intermediate state
+value CLOSE and therefore skip the logging. The related
+database action is missed on the log, which will casue
+security problem.
+
+MYSQL_LOG::new_file(..) {
+  ...
+  close();
+
+  open(...);
+}
+
+MYSQL_LOG::close() {
+  ...
+  log_type = LOG_CLOSED;
+  ...
+}
+
+MYSQL_LOG::open(...) {
+  ...
+  log_type = save_log_type;
+  ...
+}
+
+int mysql_insert(...) {
+  ...
+  if (log_type != LOG_CLOSED) {
+    ...
+    // log into bin log file
+    mysql_bin_log.write(...);
+  }
+  ...
+}
+
+The buggy interleaving is as follows:
+
+Thread 1                      Thread 2
+
+MYSQL_LOG::new_file(...) {    int mysql_insert(...) {
+  ...
+  log_type = LOG_CLOSED;
+
+                                if (log_type != LOG_CLOSED) {
+                                  ...
+                                  // log into bin log file
+                                  mysql_bin_log.write(...);
+                                }
+  
+  log_type = save_log_type;
+}                             }
+

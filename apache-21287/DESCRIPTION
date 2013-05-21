@@ -1,0 +1,78 @@
+
+Acknowledge: Shan Lu (shanlu@cs.wisc.edu)
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.0.48
+
+This is a data race and also an atomicity violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://issues.apache.org/bugzilla/show_bug.cgi?id=21287
+
+The buggy code is in mem cache module of apache. The
+'decrement_refcount' function is called when the server
+wants to cleanup the memory pool. The cache object will be
+cleaned whenever there is no reference to it. When the
+reference counter reach 0, the cache object will be cleaned
+by calling 'cleanup_cache_object(obj)'.
+
+The buggy code is as follows:
+(in modules/experimental/mod_mem_cache.c line:354)
+
+static apr_status_t decrement_refcount(void *arg) {
+  ...
+  if (!apr_atomic_dec(&obj->refcount)) {
+    if (obj->cleanup) {
+      cleanup_cache_object(obj);
+    }
+  }
+  ...
+}
+
+(function 'apr_atomic_dec' will decrement the counter and
+return the new value of the counter.)
+
+Therefore, the first 'if' statement can be rewritten like
+this:
+
+1: apr_atomic_dec(&obj->refcount);
+2: if (!obj->refcount) {
+3:   if (obj->cleanup) {
+4:     cleanup_cache_object(obj);
+5:   }
+6: }
+
+There is no lock to protect statement 1 and 2, which could
+cause the 'obj' being freed twice. This is a typical
+atomicity violation bug (single-variable).
+
+The buggy interleaving is as follows:
+
+Thread 1                           Thread 2
+
+decremetn_refcount(...)            decrement_refcount(...)
+{                                  {
+  apr_atomic_dec(&obj->refcount);
+  
+                                     apr_atomic_dec(&obj->refcount);
+                                     if (!obj->refcount) {
+                                       cleanup_cache_object(obj);
+                                     }
+
+  if (!obj->refcount) {
+    cleanup_cache_object(obj);
+  }
+}                                  }
+
+

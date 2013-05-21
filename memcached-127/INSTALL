@@ -1,0 +1,88 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in memcached-1.4.4.
+
+This is an atomicity violation (data race free).
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download source code
+-------------------------------------------------
+
+# tar zxf memcached-1.4.4.tar.gz
+# tar zxf libmemcached-0.49.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <memcached_src_dir>
+# patch -p1 -i memcached-127.patch
+
+
+3. Compile and install memcached
+-------------------------------------------------
+
+# cd <memcached_src_dir>
+# ./configure --prefix=<memcached_install_dir>
+# make
+# make install
+
+4. Compile and install libmemcached
+-------------------------------------------------
+
+# cd <libmemcached_src_dir>
+# ./configure --prefix=<libmemcached_install_dir> \
+      --with-memcached=<memcached_install_dir>
+# make
+# make install
+
+5. Compile client
+-------------------------------------------------
+
+# tar zxf reproduce-pkg.tar.gz
+# cd reproduce-pkg
+
+Modify Makefile (line 3). Change the libmemcached home
+accordingly. Then,
+
+# make
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start memcached
+-------------------------------------------------
+
+# cd <memcached_install_dir>
+# bin/memcached -t 2
+
+
+2. Trigger bug
+-------------------------------------------------
+
+Run the compiled client,
+
+# cd reproduce-pkg
+# ./trigger
+
+
+3. Check result
+-------------------------------------------------
+
+If the bug is triggered, you'll see the actual value and
+the expected value are different.
+

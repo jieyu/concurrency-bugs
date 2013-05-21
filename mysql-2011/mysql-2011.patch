@@ -1,0 +1,13 @@
+diff -Naur mysql-4.0.16-original/sql/slave.cc mysql-4.0.16-modified/sql/slave.cc
+--- mysql-4.0.16-original/sql/slave.cc	2003-10-17 01:29:20.000000000 -0400
++++ mysql-4.0.16-modified/sql/slave.cc	2009-10-30 13:51:36.000000000 -0400
+@@ -3484,6 +3484,9 @@
+ 	sql_print_error("next log '%s' is currently active",
+ 			rli->linfo.log_file_name);
+ #endif	  
++
++	usleep(1);
++
+ 	rli->cur_log= cur_log= rli->relay_log.get_log_file();
+ 	rli->cur_log_old_open_count= rli->relay_log.get_open_count();
+ 	DBUG_ASSERT(rli->cur_log_fd == -1);

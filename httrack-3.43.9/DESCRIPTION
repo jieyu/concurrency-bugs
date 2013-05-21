@@ -1,0 +1,65 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in HTTrack-3.43.9
+
+This is a an order violation concurrency bug.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+HTTrack is a offline browser utility. It allows you to 
+download a World Wide Web site from the Internet to a
+local directory.
+
+In httrack, htsserver would invoke "webhttrack_runmain"
+function to handle connectioin, and a global variable 
+"global_opt" is created in the main loop (htsweb.c:262). 
+The variable may be accessed by other thread, for instance,
+"hts_cancel_file_push" function (htscore.c:3139) is called
+by another thread to cancel a file.
+
+However, the program does not guarantee the order between
+creation of global_opt and use of it. A earler "hts_cancel_
+file_push_" function call before variable creation, may 
+crash the server.
+
+As shown below, the programmer incorrectly assumes that 
+"hts_create_opt()" in Thread 1 is always executed before 
+global_opt variable access "hts_cancel_file_push_(opt)"
+in Thread 2. Unfortunately, this order assumption is not
+guaranteed in the implementation. In some cases, global_opt
+variable access may be executed before "hts_create_opt and
+results in a null-pointer parameter, which may lead to a 
+null-pointer dereference, crashing the program.
+
+The buggy interleaving could be:
+
+Thread 1                       Thread 2
+
+void
+back_launch_cmd(...)           hts_cancel_file_push(...)
+{                              {
+  ...                            ...
+  hts_init();   
+
+ 
+                                 lock(&opt->state);
+                                 ret = hts_cancel_file_push_(opt);
+                                 unlock(&opt->state);
+
+
+  global_opt = opt 
+    = hts_create_opt();
+
+}                              }
+
+
+

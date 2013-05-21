@@ -1,0 +1,57 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A data race and atomicity violation in Aget.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+The bug is triggered when user stop the download process by
+typing ctrl-c on the console. The aget program will process
+the SIGINT signal, and call function 'save_log' to save
+downloaded blocks so that the download can be resumed.
+
+Resume.c (line 30)
+
+void save_log()
+{
+  ...
+  memcpy(&(h.wthread), wthread, sizeof(struct thread_data) * nthreads);
+  ...
+  h.bwritten = bwritten;
+  ...
+}
+
+The 'memcpy' function call saves the bytes downloaded by
+each thread, and 'h.bwritten = bwritten' saves the total
+number of bytes downloaded by all thread. In normal
+situation, the total number bytes downloaded by each thread
+should be the same as 'bwritten'. However, if the following
+interleaving happens, the results will mismatch:
+
+The buggy interleaving is like the following:
+
+Thread 1                                  Thread 2
+
+void http_get(...)                        void save_log(...)
+{                                         {
+                                            ...
+                                            memcpy(&(h.wthread), wthread, ...);
+                                            ...
+  td->offset += dw;
+
+  pthread_mutex_lock(&bwritten_mutex);
+  bwritten += dw;
+  pthread_mutex_unlock(&bwritten_mutex);
+
+                                            h.bwritten = bwritten;  
+  ...                                       ...
+}                                         }          
+

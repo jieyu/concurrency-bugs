@@ -1,0 +1,83 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Cherokee-0.9.2
+
+This is a data race and also an atomicity violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download cherokee-0.9.2 source code
+-------------------------------------------------
+
+# tar zxf cherokee-0.9.2.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <cherokee_src_dir>
+# patch -p1 -i cherokee-0.9.2.patch
+
+
+3. Configure Cherokee
+-------------------------------------------------
+
+# ./configure --prefix=<cherokee_install_dir>
+
+
+4. Compile and install
+-------------------------------------------------
+
+# make
+# make install
+
+
+5. Post-install configuration
+-------------------------------------------------
+
+Open <cherokee_install_dir>/etc/cherokee/cherokee.conf
+Modify the following lines:
+
+line 29: vserver!1!logger!access!buffsize = 1024
+
+(Option. Increase the likelihood of triggering the bug)
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start cherokee server
+-------------------------------------------------
+
+# cd <cherokee_install_dir>
+# sbin/cherokee
+
+
+2. Trigger bug
+-------------------------------------------------
+
+Send two http requests to cherokee server concurrently.
+
+first request: SERVER_ADDRESS/images/powered_by_cherokee.png
+
+second request: SERVER_ADDRESS/images/cherokee-logo.png
+
+(Seem to be more effective to manifest the bug using browsers)
+
+3. Check result
+-------------------------------------------------
+
+If the bug is triggered, you'll see the garbage in the
+access log file 'var/log/cherokee.access'
+

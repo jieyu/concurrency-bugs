@@ -1,0 +1,66 @@
+
+Acknowledge: Shan Lu (shanlu@cs.wisc.edu)
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-4.0.19
+
+This is a data race and a single-variable atomicity
+violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://bugs.mysql.com/bug.php?id=3596
+
+This bug is due to data race. The atomicity between the
+check and the use is not enfored, leading to a crash of the
+MySQL server.
+
+The bug is in function 'innobase_mysql_print_thd' in
+sql/ha_innodb.cc (this function will be called when user
+issue 'show innodb status' in the command line).
+
+void innobase_mysql_print_thd(File *f, void *input_thd) {
+  ...
+  if (thd->proc_info) {
+    putc(' ', f);
+    fputs(thd->proc_info, f);
+  }
+  ...
+}
+
+The function first check whether thd->proc_info is NULL or
+not. If not, the function will write the info to output.
+However, the check and the use is not protected by any
+synchronization primitives, it is possible that
+thd->proc_info is nullified by other threads between the
+check and the use, leading to a server crash.
+
+The buggy interleaving is as follows:
+
+Thread 1                         Thread 2
+
+void ...print_thd(..)            bool do_command(...) {
+{
+  if (thd->proc_info) {
+    putc(' ', f);
+                                   thd->proc_info = 0;
+
+    fputs(thd->proc_info, f);
+  }
+}                                }
+
+(in sql/ha_innodb.cc)            (in sql/sql_parse.cc)
+
+
+This interleaving will cause MySQL server being restarted.
+

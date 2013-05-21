@@ -1,0 +1,118 @@
+
+Acknowledge: Shan Lu (shanlu@cs.wisc.edu)
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-3.23.56
+
+This is a concurrency bug that involves multiple variables
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://bugs.mysql.com/bug.php?id=169
+
+The bug is in function 'generate_table' (sql/sql_delete.cc)
+
+The purpose of this function is to delete all entries in a
+table when user issue 'delete from <table name>'. This
+process is optimized by deleting the original table and
+creating a new table.
+
+int generate_table(...) {
+  ...
+  pthread_mutex_lock(&LOCK_open);
+  ...
+  // delete the original table
+  // create a new table
+  ...
+  pthread_mutex_unlock(&LOCK_open);
+  ...
+  mysql_update_log.write(...);
+  ...
+}
+
+bool MYSQL_LOG::write(...) {
+  ...
+  pthread_mutex_lock(&LOCK_log);
+  ...
+  // log event
+  ...
+  pthread_mutex_unlock(&LOCK_log);
+  ...
+}
+
+int mysql_insert(...) {
+  ...
+  table = open_ltable(...);
+  ...
+  mysql_update_log.write(...);
+  ...
+}
+
+TABLE *open_table(...)
+  ...
+  open_table(...);
+  ...
+}
+
+TABLE *open_table(...) {
+  ...
+  pthread_mutex_lock(&LOCK_open);
+  ...
+  pthread_mutex_unlock(&LOCK_open);
+  ...
+}
+
+The expected behavior is that the table deletion and the
+logging should not be interleaved with other events.
+
+However, in some cases, this assumption will be broken. For
+example, the first thread is performing 'delete' while the
+other therad is performing 'insert'. The first thread grabs
+'LOCK_open', delete the entries in the table, releases
+'LOCK_open'. At this time, the second thread gets
+'LOCK_open', insert an entry into the same table, release
+'LOCK_open', gets 'LOCK_log', logs 'insert' event and
+release 'LOCK_log'. Then, the first thread gets 'LOCK_log',
+log 'delete' event, and release 'LOCK_log'.
+
+Thread 1                     Thread 2
+
+int generate_table(...)      int mysql_insert(...)
+{                            {
+  lock(&LOCK_open);
+  // delete entries
+  unlock(&LOCK_open);
+
+                               lock($LOCK_open);
+                               // insert entry
+                               unlock($LOCK_open);
+                               
+
+                               lock(&LOCK_log);
+                               log.write(...);
+                               unlock(&LOCK_log);
+
+  lock(&LOCK_log);
+  log.write(...);
+  unlock(&LOCK_log);
+
+}                            }
+
+
+If this interleaving happens, the table will have one entry
+finally. However, in the log file, the 'insert' event will
+precede the 'delete' event, causing an inconsistency. This
+inconsistency will probably cause problem in database
+recovery because mysql relies on logs to recover the
+database.
+

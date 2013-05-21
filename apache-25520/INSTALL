@@ -1,0 +1,127 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.0.48
+
+This is a data race and also an atomicity violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download httpd-2.0.48 source code
+-------------------------------------------------
+
+# tar zxf httpd-2.0.48.tar.gz
+
+
+2. Configure Apache
+-------------------------------------------------
+
+# cd <httpd-src-base>
+# ./configure --prefix=<httpd-install-dir> \
+			--with-mpm=worker --disable-cgid
+
+3. Compile and install
+-------------------------------------------------
+
+If you want to compile apache-2.0.48 on x86_64 machines,
+you need to modify some files to make it compilable.
+
+1) srclib/apr/include/apr.h +244
+
+244c244
+< #define APR_HAVE_SCTP           0
+---
+> #define APR_HAVE_SCTP           1
+
+2) srclib/apr-util/include/apr_optional.h +113
+
+113c113
+<     (((void (*)(const char *, apr_opt_fn_t *)) \
+---
+>     (((void (*)(const char *, APR_OPTIONAL_FN_TYPE(name) *)) \
+
+3) srclib/apr-util/include/apr_optional_hooks.h +103
+
+103c103
+<     ((void (APR_THREAD_FUNC *)(const char *, void (*)(void),const char * const *, \
+---
+>     ((void (APR_THREAD_FUNC *)(const char *,ns##_HOOK_##name##_t *,const
+
+# make
+# make install
+
+4. Post-install configuration
+-------------------------------------------------
+
+Open /opt/apache/httpd-2.0.48-sva/conf/httpd.conf
+
+Modify the following lines:
+
+# worker MPM
+# StartServers: initial number of server processes to start
+# MaxClients: maximum number of simultaneous client connections
+# MinSpareThreads: minimum number of worker threads which are kept spare
+# MaxSpareThreads: maximum number of worker threads which are kept spare
+# ThreadsPerChild: constant number of worker threads in each server process
+# MaxRequestsPerChild: maximum number of requests a server process serves
+<IfModule worker.c>
+  StartServers          1
+  MaxClients            2
+  MinSpareThreads       2
+  MaxSpareThreads       2
+  ThreadsPerChild       2
+  MaxRequestsPerChild   0
+  ServerLimit           1
+  ThreadLimit           2
+</IfModule>
+
+And, add the following line to the end of the file
+
+	BufferedLogs on
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start apache server
+-------------------------------------------------
+
+# cd <httpd-install-dir>
+# bin/apachectl start
+
+
+2. Trigger bug
+-------------------------------------------------
+
+Then you just need to send httpd request for two
+(different) files. Please keep sending them concurrently.
+
+You can either use tools like httperf
+
+# ./httperf --server=<your-httpd-server-name> \
+    --uri=/index.html.cz.iso8859-2 --num-conns=100 \
+    --num-calls=100
+
+# ./httperf --server=<your-httpd-server-name> \
+    --uri=/index.html.en --num-conns=100 --num-calls=100
+
+Or just use
+
+# wget <file name>
+
+3. Check result
+-------------------------------------------------
+
+If the bug is triggered, you'll see the garbage in the
+access log file 'logs/access_log'
+

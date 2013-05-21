@@ -1,0 +1,214 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.0.48
+
+This is a data race and also an atomicity violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL APACHE                                   |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download httpd-2.0.48 source code
+-------------------------------------------------
+
+# tar zxf httpd-2.0.48.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <httpd-src-base>
+# patch -p1 -i apache-21287.patch
+
+
+3. Configure
+-------------------------------------------------
+
+# cd <httpd-src-base>
+# ./configure --prefix=<httpd-install-dir> \
+			--with-mpm=worker --enable-cache -enable-mem-cache \
+      CFLAGS="-g"
+
+
+3. Compile and install
+-------------------------------------------------
+
+If you want to compile apache-2.0.48 on x86_64 machines,
+you need to modify some files to make it compilable.
+
+1) srclib/apr/include/apr.h +244
+
+244c244
+< #define APR_HAVE_SCTP           0
+---
+> #define APR_HAVE_SCTP           1
+
+2) srclib/apr-util/include/apr_optional.h +113
+
+113c113
+<     (((void (*)(const char *, apr_opt_fn_t *)) \
+---
+>     (((void (*)(const char *, APR_OPTIONAL_FN_TYPE(name) *)) \
+
+3) srclib/apr-util/include/apr_optional_hooks.h +103
+
+103c103
+<     ((void (APR_THREAD_FUNC *)(const char *, void (*)(void),const char * const *, \
+---
+>     ((void (APR_THREAD_FUNC *)(const char *,ns##_HOOK_##name##_t *,const
+
+# make
+# make install
+
+(If you meet problem with libexpact.so, make sure to use
+64-bit version of libexpact.so)
+
+4. Post-install configuration
+-------------------------------------------------
+
+Open /opt/apache/httpd-2.0.48-sva/conf/httpd.conf
+
+Add the following lines to the conf file:
+
+<IfModule mod_cache.c>
+  <IfModule mod_mem_cache.c>
+  CacheEnable mem /
+  CacheDefaultExpire 1000
+  CacheMaxExpire 3000
+  CacheIgnoreCacheControl Off
+  CacheIgnoreNoLastMod    On
+  MCacheSize  2000
+  MCacheMaxObjectCount 50
+  MCacheMinObjectSize  1
+  MCacheMaxObjectSize  1048576
+  </IfModule>
+</IfModule>
+
+Also, modify the following lines:
+
+<IfModule worker.c>
+  StartServers         2
+  MaxClients         150
+  MinSpareThreads      5
+  MaxSpareThreads      5
+  ThreadsPerChild     10
+  MaxRequestsPerChild  0
+</IfModule>
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL PHP                                      |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download php-4.4.1
+-------------------------------------------------
+
+# tar zxvf php-4.4.1.tar.gz
+
+
+2. Configure
+-------------------------------------------------
+
+# cd <php-src-dir>
+# ./configure --prefix=<httpd-install-dir>/php \
+      --with-config-file-path=<httpd-install-dir>/php \
+      --with-mysql --with-apxs2=<httpd-install-dir>/bin/apxs
+
+
+3. Compile and install
+-------------------------------------------------
+
+# cd <php-src-dir>
+# make
+# make install
+
+
+4. Post install configuration
+-------------------------------------------------
+
+1) Copy <php-src-dir>/php.ini-dist to your install dir
+
+# cp <php-src-dir>/php.ini-dist <httpd-install-dir>/php/php.ini
+
+(make sure to rename the file!)
+
+
+2) Copy 'pippo.php' to the web document root
+
+# cp pippo.php <httpd-install-dir>/htdocs
+
+
+3) Add entries to httpd.conf
+
+Make sure the following lines are in the httpd.conf
+
+LoadModule php4_module        modules/libphp4.so
+
+AddType application/x-httpd-php .php .phtml
+AddType application/x-httpd-php-source .phps
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start apache server
+-------------------------------------------------
+
+# cd <httpd-install-dir>
+# bin/apachectl start
+
+
+2. Trigger bug
+-------------------------------------------------
+
+Then you just need to send httpd request for two
+(different) files. Please keep sending them concurrently.
+
+You can either use tools like httperf
+
+# ./httperf --server=<your-httpd-server-name> \
+    --uri=/pippo.php?variable=1111 --num-conns=10 \
+    --num-calls=10
+
+# ./httperf --server=<your-httpd-server-name> \
+    --uri=/pippo.php?variable=1111 --num-conns=10 \
+     --num-calls=10
+
+
+3. Check result
+-------------------------------------------------
+
+Check the '<httpd-install-dir>/logs/error_log' file. If the
+bug is triggered, you will see the error message like this:
+
+*** glibc detected *** /opt/apache/httpd-2.0.48/bin/httpd: free(): invalid pointer: 0x00000030d5b499c0 ***
+======= Backtrace: =========
+/lib64/libc.so.6[0x30d586e8a0]
+/lib64/libc.so.6(cfree+0x8c)[0x30d5871fbc]
+/opt/apache/httpd-2.0.48/bin/httpd[0x425efc]
+/opt/apache/httpd-2.0.48/bin/httpd[0x4261d4]
+/opt/apache/httpd-2.0.48/lib/libapr-0.so.0[0x2aaaaad13efa]
+/opt/apache/httpd-2.0.48/lib/libapr-0.so.0(apr_pool_destroy+0x35)[0x2aaaaad1319e]
+/opt/apache/httpd-2.0.48/bin/httpd[0x435eef]
+/opt/apache/httpd-2.0.48/bin/httpd(ap_run_process_connection+0x5a)[0x468ab4]
+/opt/apache/httpd-2.0.48/bin/httpd(ap_process_connection+0x5b)[0x468e9b]
+/opt/apache/httpd-2.0.48/bin/httpd[0x45583a]
+/opt/apache/httpd-2.0.48/bin/httpd[0x456071]
+/opt/apache/httpd-2.0.48/lib/libapr-0.so.0[0x2aaaaad0caf6]
+/lib64/libpthread.so.0[0x30d64061b5]
+/lib64/libc.so.6(clone+0x6d)[0x30d58cd39d]
+======= Memory map: ========
+[Mon Nov 02 23:24:44 2009] [notice] child pid 8371 exit signal Aborted (6)
+
+

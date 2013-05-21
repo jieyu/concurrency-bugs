@@ -1,0 +1,93 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in class StringBuffer (jdk1.4, v1.70)
+
+This is a concurrency bug that involves multiple variables
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found in the following paper:
+
+"C. Flanagan and S. Qadeer. A type and effect system for
+atomicity. In Proceedings of the ACM SIGPLAN 2003."
+
+The bug is in of class java.lang.StringBuffer
+
+public final class StringBuffer
+    implements java.io.Serializable, CharSequence
+{
+  ...
+
+  public synchronized StringBuffer append(StringBuffer sb)
+  {
+    if (sb == null) {
+      sb = NULL;
+    }
+
+    int len = sb.length();
+    int newcount = count + len;
+    if (newcount > value.length)
+      expandCapacity(newcount);
+    sb.getChars(0, len, value, count);
+    count = newcount;
+    return this;
+  }
+
+  public synchronized int length()
+  {
+    return count;
+  }
+
+  public synchronized void getChars(...)
+  {
+    if (srcBegin < 0) {
+      throw new StringIndexOutOfBoundsException(srcBegin);
+    }
+    if ((srcEnd < 0) || (srcEnd > count)) {
+      throw new StringIndexOutOfBoundsException(srcEnd);
+    }
+    if (srcBegin > srcEnd) {
+      throw new StringIndexOutOfBoundsException(...);
+    }
+    System.arraycopy(...);
+  }
+  
+  ...
+}
+
+After 'append' calls the synchronized method sb.length(), a
+second thread could remove characters from sb. In this
+situation, len is now stale [9] and no longer reflects the
+current length of sb, and so getChars is called with
+invalid arguments and throws a
+StringIndexOutOfBoundsException. The following test harness
+triggers this crash. (Flanagan'03)
+
+public class BreakStringBuffer extends Thread
+{
+  static StringBuffer sb = new StringBuffer("abc");
+  public void run()
+  {
+    while(true) {
+      sb.delete(0,3);
+      sb.append("abc");
+    }
+  }
+  
+  public static void main(String[] argv)
+  {
+    (new BreakStringBuffer()).start();
+    while(true)
+      (new StringBuffer()).append(sb);
+    }
+  }
+}

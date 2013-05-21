@@ -1,0 +1,19 @@
+diff -Naur pbzip2-0.9.4-src-ori/pbzip2.cpp pbzip2-0.9.4-src/pbzip2.cpp
+--- pbzip2-0.9.4-src-ori/pbzip2.cpp	2010-06-21 19:52:58.000000000 -0400
++++ pbzip2-0.9.4-src/pbzip2.cpp	2010-06-21 19:54:11.000000000 -0400
+@@ -894,6 +894,7 @@
+ 			#endif
+ 			if (allDone == 1)
+ 			{
++				sleep(1);
+ 				pthread_mutex_unlock(fifo->mut);
+ 				#ifdef PBZIP_DEBUG
+ 				printf ("consumer: exiting2\n");
+@@ -1923,6 +1924,7 @@
+ 		delete MemMutex;
+ 		MemMutex = NULL;
+ 	}
++	sleep(1);
+ 
+ 	// get current time for end of benchmark
+ 	#ifndef WIN32

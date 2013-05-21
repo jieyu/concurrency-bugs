@@ -1,0 +1,96 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.0.48
+
+This is a data race and also an atomicity violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+https://issues.apache.org/bugzilla/show_bug.cgi?id=25520
+
+This code region includes more than one atomicity violation
+(data race) bugs. One thread's read-write sequence may
+falsely mingle with another thread's read-write sequence to
+the same shared variable, leading to program's misbehavior. 
+
+Specifically, the bug is in
+modules/loggers/mod_log_config.c The bug is very obvious.
+In the ap_buffered_log_writer function, buf->outcnt is the
+indx to the end of the log buffer. In the fuction, it is
+read, checked, and then used to help append the log buffer,
+after the log buffer update (memcpy line), the buf->outcnt
+is increased. The whole process is not protected by lock.
+As a result, the other thread may be doing the same
+operation and the buf->outcnt and consequently the buffer
+is totally mess, if bug triggered.
+
+apr_status_t
+ap_buffered_log_writer(request_rec *r,
+                       void *handle,
+                       const char **strs,
+                       int *strl,
+                       int nelts,
+                       apr_size_t len)
+{
+  char *str;
+  char *s;
+  int i;
+  apr_status_t rv;
+  buffered_log *buf = (buffered_log*)handle;
+
+  if (len + buf->outcnt > LOG_BUFSIZE) {
+    flush_log(buf);
+  }
+  if (len >= LOG_BUFSIZE) {
+    apr_size_t w;
+
+    str = apr_palloc(r->pool, len + 1);
+    for (i = 0, s = str; i < nelts; ++i) {
+      memcpy(s, strs[i], strl[i]);
+      s += strl[i];
+    }
+    w = len;
+    rv = apr_file_write(buf->handle, str, &w);    
+  }
+  else {
+    for (i = 0, s = &buf->outbuf[buf->outcnt]; i < nelts; ++i) {
+      memcpy(s, strs[i], strl[i]);
+      s += strl[i];
+    }
+    buf->outcnt += len;
+    rv = APR_SUCCESS;
+  }
+  return rv;
+}
+
+The buggy interleaving could be:
+
+Thread 1                       Thread 2
+
+ap_buffered_log_writer(...)    ap_buffered_log_writer(...)
+{                              {
+  ...
+  idx = buf->outcnt;
+  s = &buf->output[idx];
+
+                                 idx = buf->outcnt;
+                                 s = &buf->outcnt[idx];
+
+                                 buf->outcnt += len;
+
+  buf->outcnt += len;
+
+}                              }
+
+
+

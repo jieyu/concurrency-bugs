@@ -1,0 +1,226 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.2.9
+
+This is a multi-variable atomicity violation bug. (also data
+race but intentional)
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://issues.apache.org/bugzilla/show_bug.cgi?id=45605
+
+<<<<< Overview >>>>>
+
+The main cause of this bug is a race condition on variable
+'queue_info->idlers' in function 'ap_queue_info_set_idle'.
+The check of 'queue_info->idlers' and the 'cond_signal' are
+supposed to be atomic (cond_signal is issued when the number
+of idlers is zero previously). However, the check of
+'queue_info->idlers' is not in the critical section, leading
+to an atomicity violation.
+
+On the other hand, this bug also exposes a flaw in the code.
+In function 'ap_queue_info_wait_for_idler' (in fdqueue.c),
+after the 'cond_wait' function, the condition is not checked
+again (queue_info->idlers == 0). The bug will not occur if
+the condition is checked after the listener thread is waked
+by a 'cond_signal'. Looking at the description of function
+'apr_thread_cond_wait', it says:
+
+"@remark Spurious wakeups may occur. Before and after every
+call to wait on a condition variable, the caller should test
+whether the condition is already met."
+
+<<<<< Details >>>>>
+
+The bug is in mpm worker subsystem. In workder mpm mode,
+there are two type of threads. One is listener thread which
+accept socket connections and dispatch connections. The
+other is worker threads, which get connection from listener
+thread and do the actual job. The listener thread and the
+worker threads communicate through a queue (see the file
+'server/mpm/worker/fdqueue.c').
+
+When a connection is accepted by the listener thread, an
+element will be pushed into the queue and the worker
+threads will pop the element from the queue and do the job.
+The queue will keep track of the number of idle worker
+threads in the system. If the number of idlers reaches zero,
+the listener will stop pushing elements into the queue and
+wait on a conditional variable 'queue_info->wait_for_idler'.
+Whenever a worker thread finishes its execution, it will
+raise a signal if it finds the number of current idlers is
+zero (in function 'ap_queue_info_set_idle').
+
+Now, consider the following situation:
+
+Initially, the listener thread just accepted a connection
+and set idler to 0.
+
+1. A worker thread finishes its execution, call function
+'ap_queue_info_set_idle', setting idlers from 0 to 1. (do
+not perform the cond_signal yet)
+
+2. The listener thread sees that the idlers is 1, so
+decreases it to 0, get another connection, and then wait for
+idle worker threads in 'ap_queue_info_wait_for_idler'.
+
+3. The worker thread resumes its execution and does a
+conditional signal.
+
+4. The listener thread is waked up by the cond_signal and
+set idlers to -1.
+
+An underflow happens. It will finally crash the server
+(or causing assertion failure).
+
+----------
+
+server/mpm/worker/worker.c: line 819
+
+void *worker_thread(...)
+{
+  ...
+  while (!workers_may_exit) {
+    ...
+    ap_queue_info_set_idle(...);
+    ...
+    ap_queue_pop(worker_queue, ...);
+    ...
+    process_socket(...);
+    ...
+  }
+}
+
+The worker thread is in a big while loop. Each time it
+finishes the previous work, it will call function
+'ap_queue_info_set_idle' to notify listener thread that it
+is idle now. Then, it tries to pop a socket from the queue
+and process the socket.
+
+server/mpm/worker/fdqueue.c: line 82
+
+apr_status_t ap_queue_info_set_idle(...)
+{
+  ...
+  prev_idlers = queue_info->idlers;
+  apr_atomic_cas32(&queue_info->idlers, prev_idlers + 1, ...);
+  ...
+  if (prev_idlers == 0) {
+    apr_thread_mutex_lock(queue_info->idlers_mutex);
+    ...
+    apr_thread_cond_signal(queue_info->wait_for_idler);
+    ...
+    apr_thread_mutex_unlock(queue_info->idlers_mutex);
+  }
+  ...
+}
+
+This function increases the idlers and raises a cond_signal
+if the idlers is zero previously. Notice that the increment
+of idlers and the cond_signal is not in a critical section.
+This is the major cause of this bug.
+
+----------
+
+server/mpm/worker/worker.c: line 593
+
+void *listener_thread(...)
+{
+  ...
+  while (1) {
+    ...
+    ap_queue_info_wait_for_idler(...);
+    ...
+    apr_proc_mutex_lock(accept_mutex);
+    ...
+    rv = lr->accept_func(&csd, lr, ptrans);
+    ...
+    apr_proc_mutex_unlock(accept_mutex);
+    ...
+    ap_queue_push(worker_queue, ...);
+    ...
+  }
+  ...
+}
+
+The listener thread is in a big while loop. Each time, it
+will be blocked in funciton 'ap_queue_info_wait_for_idler'
+if no worker thread is in idle state. Once there exist idle
+worker threads, the listener thread will accept a socket and
+push the socket into the queue.
+
+server/mpm/worker/fdqueue.c: line 140
+
+apr_status_t ap_queue_info_wait_for_idler(...)
+{
+  ...
+  if (queue_info->idlers == 0) {
+    apr_thread_mutex_lock(queue_info->idlers_mutex);
+    ...
+    if (queue_info->idlers == 0) {
+      apr_thread_cond_wait(queue_info->wait_for_idler,
+                           queue_info->idlers_mutex);
+      ...
+    }
+    apr_thread_mutex_unlock(queue_info->idlers_mutex);
+    ...
+  }
+  ...
+  apr_atomic_dec32(&(queue_info->idlers));
+  ...
+}
+
+This function check the idlers and wait on a conditional
+variable if no idle worker thread presents. Notice that
+there is no condition check after the cond_wait function.
+And this is one cause of the bug.
+
+----------
+
+<<<<< Buggy Interleaving >>>>>
+
+Initial: queue_info->idler == 0;
+
+Listener Thread                       Worker Thread
+
+listener_thread(...)                  ap_queue_info_set_idle(...)
+{                                     {
+                                        ...
+                                        prev_idlers = queue_info->idlers;
+                                        queue_info->idlers++;
+                                        ...
+
+  if (queue_info->idlers == 0) {}
+  ...
+  queue_info->idlers--;
+  ...
+  if (queue_info->idlers == 0) {
+    lock(idlers_mutex);
+    ...
+    if (queue_info->idlers == 0) {
+      cond_wait(wait_for_idler);
+
+                                        lock(idlers_mutex);
+                                        cond_signal(wait_for_idler);
+                                        unlock(idlers_mutex);
+
+            
+    }
+    unlock(idlers_mutex);
+  }
+
+  queue_info->idlers--;
+  ...
+}                                     }
+

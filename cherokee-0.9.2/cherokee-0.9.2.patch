@@ -1,0 +1,11 @@
+diff -Naur cherokee-0.9.2-orig/cherokee/buffer.c cherokee-0.9.2/cherokee/buffer.c
+--- cherokee-0.9.2-orig/cherokee/buffer.c	2011-04-05 01:08:39.783641204 -0400
++++ cherokee-0.9.2/cherokee/buffer.c	2011-04-05 01:10:30.263844436 -0400
+@@ -186,6 +186,7 @@
+ 	 */
+ 	memcpy (buf->buf + buf->len, txt, size);
+ 
++       usleep(1000);
+ 	buf->len += size;
+ 	buf->buf[buf->len] = '\0';
+ 

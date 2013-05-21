@@ -1,0 +1,127 @@
+
+Acknowledge: Shan Lu (shanlu@cs.wisc.edu)
+             Min Xu
+             Yuanbo Fan
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A single variable concurrency bug in MySQL-4.1.1-alpha.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download MySQL-4.1.1-alpha source code
+-------------------------------------------------
+
+# tar zxf mysql-4.1.1-alpha.tar.gz
+
+
+2. Configure MySQL
+-------------------------------------------------
+
+# cd <mysql-src-base>
+# ./configure --prefix=<mysql-install-dir>
+
+if the configuration script complain about not finding
+'LinuxThreads', a trick is needed to bypass this problem
+
+use any editor to open '/usr/include/pthread.h'
+
+add the following line to the end of the file:
+
+------ begin here ------
+
+/* Linuxthreads */
+
+------ end here --------
+
+
+3. Compile and install
+-------------------------------------------------
+
+# make
+# make install
+
+
+4. Post-install configuration
+-------------------------------------------------
+
+first, create user and group for mysql server
+
+# groupadd mysql
+# useradd -g mysql mysql
+
+then, change the directory permission for mysql
+
+# cd <mysql-install-dir>
+# chown mysql -R .
+# chgrp mysql -R .
+
+finally, initialize mysql database
+
+# cd <mysql-install-dir>
+# su mysql
+# bin/mysql_install_db --user=mysql
+
+the above information can also be found on mysql website
+
+
+5. Configure and build the client scripts
+------------------------------------------------
+
+Go to the package base directory.
+
+Open 'Makefile', go to line 3, and set the proper base
+directory for the newly installed MySQL.
+
+Open 'runtran.cc', go to line 23-24, and set the proper
+path for both macros.
+
+Open 'populate_db.sh', go to line 3, and set the proper
+base directory for the newly installed MySQL.
+
+Now, compile runtran.cc
+
+# make
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start mysql database server
+-------------------------------------------------
+
+# cd <mysql-install-dir>
+# bin/safe_mysqld --user=mysql &
+
+
+2. Create test tables
+-------------------------------------------------
+
+# cd <package-dir>
+# ./populate_db.sh
+
+
+3. Trigger bug
+-------------------------------------------------
+
+Run 'trigger.sh' to trigger the bug
+
+# ./trigger.sh
+
+
+4. Check result
+-------------------------------------------------
+
+You will soon notice that the MySQL server crashes.
+

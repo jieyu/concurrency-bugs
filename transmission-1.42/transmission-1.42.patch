@@ -1,0 +1,10 @@
+--- transmission-1.42-orig/libtransmission/session.c	2008-12-24 12:48:40.000000000 -0500
++++ transmission-1.42/libtransmission/session.c	2011-03-26 22:45:20.750695538 -0400
+@@ -278,6 +278,7 @@
+     h->shared = tr_sharedInit( h, isPortForwardingEnabled, publicPort );
+     h->isPortSet = publicPort >= 0;
+ 
++    sleep(1);
+     h->bandwidth = tr_bandwidthNew( h, NULL );
+     tr_sessionSetSpeedLimit       ( h, TR_UP,   uploadLimit );
+     tr_sessionSetSpeedLimitEnabled( h, TR_UP,   useUploadLimit );

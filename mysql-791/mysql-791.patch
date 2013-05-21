@@ -1,0 +1,13 @@
+diff -Naur mysql-4.0.12-original/sql/log.cc mysql-4.0.12-modified/sql/log.cc
+--- mysql-4.0.12-original/sql/log.cc	2003-03-15 10:47:54.000000000 -0500
++++ mysql-4.0.12-modified/sql/log.cc	2009-10-30 16:50:02.000000000 -0400
+@@ -860,6 +860,9 @@
+   save_log_type=log_type;
+   name=0;				// Don't free name
+   close();
++  
++  sleep(2);
++
+   open(old_name, save_log_type, new_name_ptr, index_file_name, io_cache_type,
+        no_auto_events);
+   my_free(old_name,MYF(0));

@@ -1,0 +1,112 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in Apache-2.2.9.
+
+This is a multi-variable atomicity violation bug (also data
+race but intentional).
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL APACHE                                   |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download httpd-2.2.9 source code
+-------------------------------------------------
+
+# tar zxf httpd-2.2.9.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <httpd-src-base>
+# patch -p1 -i apache-45605.patch
+
+(The patch is used to increase the likelihood of triggering
+the bug. If the patch is not used, it will take a long time
+to trigger the bug.)
+
+
+3. Configure
+-------------------------------------------------
+
+# cd <httpd-src-base>
+# ./configure --prefix=<httpd-install-dir> --with-mpm=worker --enable-maintainer-mode
+
+
+3. Compile and install
+-------------------------------------------------
+
+# make
+# make install
+
+
+4. Post-install configuration
+-------------------------------------------------
+
+1) Open <httpd-install-dir>/conf/httpd.conf
+
+Uncomment the following line: (line 370)
+
+Include conf/extra/httpd-mpm.conf
+
+2) Open <httpd-install-dir>/conf/extra/httpd-mpm.conf
+
+Modify the following lines:
+
+<IfModule mpm_worker_module>
+    StartServers          1
+    MaxClients            3
+    MinSpareThreads       1
+    MaxSpareThreads       3
+    ThreadsPerChild       3
+    MaxRequestsPerChild   0
+    ServerLimit           1
+</IfModule>
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start apache server
+-------------------------------------------------
+
+# cd <httpd-install-dir>
+# bin/apachectl start
+
+
+2. Trigger bug
+-------------------------------------------------
+
+Run the prepared scripts concurrently (I used 4 consoles).
+
+console0:
+# ./trigger-con0.sh 0
+
+console1:
+# ./trigger-con1.sh 0
+
+console2:
+# ./trigger-con0.sh 0
+
+console3:
+# ./trigger-con1.sh 0
+
+
+3. Check result
+-------------------------------------------------
+
+Check the '<httpd-install-dir>/logs/error_log' file. If the
+bug is triggered, you will see the error message like this:
+
+[Mon Jun 21 11:44:18 2010] [crit] [Mon Jun 21 11:44:18 2010] file fdqueue.c, line 308, assertion "!((queue)->nelts == (queue)->bounds)" failed
+[Mon Jun 21 11:44:18 2010] [notice] child pid 981 exit signal Aborted (6)

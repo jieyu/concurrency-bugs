@@ -1,0 +1,128 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-4.0.19
+
+This is a data race and a single-variable atomicity
+violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download MySQL-4.0.19 source code
+-------------------------------------------------
+
+# tar zxf mysql-4.0.19.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <mysql-src-base>
+# patch -p1 -i mysql-3596.patch
+
+
+3. Configure MySQL
+-------------------------------------------------
+
+# cd <mysql-src-base>
+# ./configure --prefix=<mysql-install-dir>
+
+if the configuration script complain about not finding
+'LinuxThreads', a trick is needed to bypass this problem
+
+use any editor to open '/usr/include/pthread.h'
+
+add the following line to the end of the file:
+
+------ begin here ------
+
+/* Linuxthreads */
+
+------ end here --------
+
+
+4. Compile and install
+-------------------------------------------------
+
+# make
+# make install
+
+
+5. Post-install configuration
+-------------------------------------------------
+
+first, create user and group for mysql server
+
+# groupadd mysql
+# useradd -g mysql mysql
+
+then, change the directory permission for mysql
+
+# cd <mysql-install-dir>
+# chown mysql -R .
+# chgrp mysql -R .
+
+finally, initialize mysql database
+
+# cd <mysql-install-dir>
+# su mysql
+# bin/mysql_install_db --user=mysql
+
+the above information can also be found on mysql website
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start mysql database server
+-------------------------------------------------
+
+# cd <mysql-install-dir>
+# bin/safe_mysqld --user=mysql --default-table-type=INNODB &
+
+(set INNODB to be the default storage enginee)
+
+
+2. Create test table
+-------------------------------------------------
+
+# cd <mysql-install-dir>
+# bin/mysql -u root < bug-init.sql
+
+
+3. Trigger bug
+-------------------------------------------------
+
+open two consoles, and prepare the command, but don't issue
+
+console 1:
+
+# bin/mysql -u root -e 'show innodb status'
+
+console 2:
+
+# bin/mysql -u root -D testdb -e 'select * from idnameage'
+
+now, issue 'show innodb status' command first, and then
+immediately issue 'select' command from another console
+(be quick)
+
+
+4. Check result
+-------------------------------------------------
+
+If the bug is triggered, the MySQL server will restart due
+to receiving signal 11. (You can check the log in
+<mysql-install-dir>/var/<domain-name>.err file)
+

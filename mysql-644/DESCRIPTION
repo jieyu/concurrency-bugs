@@ -1,0 +1,135 @@
+
+Acknownledge: Shan Lu (shanlu@cs.wisc.edu)
+              Min Xu
+              Yuanbo Fan
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-4.1.1-alpha
+
+This is a data race and a single-variable atomicity
+violation bug.
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://bugs.mysql.com/bug.php?id=644
+
+Alternatively, refer to Min Xu's SVD paper (PLDI'05) to get
+more details.
+
+To my knownledge, I think this bug is due to lack of
+atomicity in function 'join_init_cache'.
+
+sql/sql_select.cc line: 7547
+
+static int join_init_cache(THD *thd, JOIN_TAB *tables,
+                           uint table_count)
+{
+  ...
+  join_tab = tables;
+  calc_used_field_length(thd, join_tab);
+  ...
+  for (f_ptr = tables[i].table->field,
+         used_fields = tables[i].used_fields ;
+       used_fields ; f_ptr++)
+  {
+    field = *f_ptr;
+    if (field->query_id == thd->query_id)
+    {
+      used_fields--;
+      ...
+    }
+  }
+  ...
+}
+
+The function 'calc_used_field_length' is used to calculate
+the number of fields that are affected by the query.
+
+sql/sql_select.cc line: 2995
+
+static void calc_used_field_length(THD *thd,
+                                   JOIN_TAB *join_tab)
+{
+  ...
+  for (f_ptr = join_tab->table->field ;
+       (field = *f_ptr) ; f_ptr++)
+  {
+    if (field->query_id == thd->query_id)
+    {
+      ...
+      fields++;
+      ...
+    }
+  }
+  ...
+  join_tab->used_fields=fields;
+  ...
+}
+
+The calculated 'used_fields' will later be used in function
+'join_init_cache' as a loop termination condition (combine
+with 'field->query_id'). However, if the 'query_id' of some
+fields are modified in between 'calc_used_field_length' and
+the for loop (in 'join_init_cache'), the loop will go out
+of bound and finally cause a segmentation fault (crashes
+MySQL).
+
+The 'field->query_id' is likely to be modified by:
+
+sql/item.cc line: 812
+
+bool Item_field::fix_fields(THD *thd, TABLE_LIST *tables,
+                            Item **ref)
+{
+  ...
+  if (!field)
+  {
+    ...
+  }
+  else if (thd->set_query_id && 
+           field->query_id != thd->query_id)
+  {
+    ...
+    field->query_id=thd->query_id;
+    ...
+  }
+  ...
+}
+
+The buggy interleaving could be like the following:
+
+Thread 1                                           Thread 2
+
+int join_init_cache(...)                           bool Item_field::fix_fields(THD *thd,
+{                                                                              TABLE_LIST *tables,
+   ...                                                                         Item **ref)
+  join_tab = tables;                               {
+  calc_used_field_length(thd, join_tab);
+                                                     ...
+                                                     field->query_id=thd->query_id;
+  ...                                                ...
+  for (f_ptr = tables[i].table->field,
+         used_fields = tables[i].used_fields ;
+       used_fields ; f_ptr++)
+  {
+    field = *f_ptr;
+    if (field->query_id == thd->query_id)
+    {
+      used_fields--;
+      ...
+    }
+  }
+  ...
+}                                                  }
+
+

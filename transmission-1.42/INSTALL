@@ -1,0 +1,65 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+An order violation concurrency bug in transmission-1.42.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download tranmission-1.42 source code
+-------------------------------------------------
+
+# tar jxvf transmission-1.42.tar.bz2
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <transmission_src_dir>
+# patch -p1 -i transmission-1.42.patch
+
+(This patch is used to increase the likeihood of treggering
+the bug)
+
+3. Configure
+-------------------------------------------------
+
+# configure --refix=<transmission_install_dir>
+
+
+4. Compile and Install
+-------------------------------------------------
+
+# make
+# make install
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Run the program
+-------------------------------------------------
+
+# cd <transmission_install_dir>
+# bin/transmissioncli xxx.torrent
+
+
+2. Check result
+-------------------------------------------------
+
+When the bug is triggered, you will see assertion message in
+the console as below:
+
+bandwidth.c:251: allocateBandwidth: Assertion 'tr_isBandwidth(b)' failed.
+Aborted
+

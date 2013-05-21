@@ -1,0 +1,33 @@
+diff -Naur aget-devel-ori/Aget.c aget-devel/Aget.c
+--- aget-devel-ori/Aget.c	2004-06-01 02:42:21.000000000 -0400
++++ aget-devel/Aget.c	2011-04-21 21:32:08.000000000 -0400
+@@ -442,6 +442,7 @@
+ 	else	/* Restart threads that failed */
+ 		goto retry;
+ 
++        usleep(300000);
+         time(&t_finish);
+         if ((diff_sec = t_finish - t_start) == 0)
+ 		diff_sec = 1;   /* Avoid division by zero */
+diff -Naur aget-devel-ori/Signal.c aget-devel/Signal.c
+--- aget-devel-ori/Signal.c	2004-04-18 15:42:00.000000000 -0400
++++ aget-devel/Signal.c	2011-04-21 21:32:49.000000000 -0400
+@@ -42,7 +42,7 @@
+ 	sigaddset(&set, SIGTERM);
+ 	sigaddset(&set, SIGALRM);
+ 	/* Set off alarm so that progressbar is updated at regular intervals	*/
+-	alarm(1);	
++	ualarm(1, 0);
+ 
+ 	while(1) {
+ 		/* TODO for Solaris, fix bugs here. */
+@@ -89,6 +89,7 @@
+ 
+ void sigalrm_handler(void)
+ {
+-	updateProgressBar();
+-	alarm(1);
++	while (1) {
++		updateProgressBar();
++	}
+ }

@@ -1,0 +1,59 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A deadlock bug in aget-devel due to asynchronous thread
+cancellation.
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download aget-devel source
+-------------------------------------------------
+
+# tar jxvf aget-devel.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <aget_src_dir>
+# patch -p1 -i aget-bug1.patch
+
+
+3. Compile
+-------------------------------------------------
+
+# make
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Run the triggering script
+-------------------------------------------------
+
+# ./trigger.sh
+
+
+2. Check result
+-------------------------------------------------
+
+This bug is hard to reproduce even if we injected delays
+into the program. The main reason is that we are not able
+to inject delay into glibc functions. If the bug is
+triggered, you will find that the program deadlock when it
+finishes the download and is about to exit.
+
+To further increase the likelihood of triggering the bug,
+you can apply aget-bug1.patch2 to the source code.
+

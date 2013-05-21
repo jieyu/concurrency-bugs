@@ -1,0 +1,133 @@
+
+Acknowledge: Shan Lu (shanlu@cs.wisc.edu)
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-3.23.56
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download MySQL-3.23.56 source code
+-------------------------------------------------
+
+# tar zxf mysql-3.23.56.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <mysql-src-base>
+# patch -p1 -i mysql-169.patch
+
+
+3. Configure MySQL
+-------------------------------------------------
+
+# cd <mysql-src-base>
+# ./configure --prefix=<mysql-install-dir>
+
+if the configuration script complain about not finding
+'LinuxThreads', a trick is needed to bypass this problem
+
+use any editor to open '/usr/include/pthread.h'
+
+add the following line to the end of the file:
+
+------ begin here ------
+
+/* Linuxthreads */
+
+------ end here --------
+
+
+4. Compile and install
+-------------------------------------------------
+
+# make
+# make install
+
+
+5. Post-install configuration
+-------------------------------------------------
+
+first, create user and group for mysql server
+
+# groupadd mysql
+# useradd -g mysql mysql
+
+then, change the directory permission for mysql
+
+# cd <mysql-install-dir>
+# chown mysql -R .
+# chgrp mysql -R .
+
+finally, initialize mysql database
+
+# cd <mysql-install-dir>
+# su mysql
+# bin/mysql_install_db --user=mysql
+
+the above information can also be found on mysql website
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Start mysql database server
+-------------------------------------------------
+
+# cd <mysql-install-dir>
+# bin/safe_mysqld --user=mysql --log-bin &
+
+
+2. Create test table
+-------------------------------------------------
+
+# bin/mysql -u root -D test -e 'create table t1 (id int)'
+
+
+3. Trigger bug
+-------------------------------------------------
+
+open two consoles, and prepare the command, but don't issue
+
+console 1:
+
+# bin/mysql -u root -D test -e 'delete from t1'
+
+console 2:
+
+# bin/mysql -u root -D test -e 'insert into t1 values (1)'
+
+now, issue 'delete' command first, and then immediately
+issue 'insert' command from another console (be quick)
+
+
+4. Check result
+-------------------------------------------------
+
+first, check binlog
+
+# bin/mysqlbinlog -s var/<default-bin-log>
+
+you will find the 'insert' happens before the 'delete',
+which means that there should be no entry in table t1
+
+however, check the content in the table
+
+# bin/mysql -u root -D test -e 'select * from t1'
+
+you will find that there is one row in the table t1, which
+is inconsistent with the content in the bin log
+

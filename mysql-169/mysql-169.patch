@@ -1,0 +1,20 @@
+diff -Naur mysql-3.23.56-src-original/sql/sql_delete.cc mysql-3.23.56-src-modified/sql/sql_delete.cc
+--- mysql-3.23.56-src-original/sql/sql_delete.cc	2003-03-13 13:31:54.000000000 -0500
++++ mysql-3.23.56-src-modified/sql/sql_delete.cc	2009-08-09 20:54:26.000000000 -0400
+@@ -20,6 +20,8 @@
+ #include "mysql_priv.h"
+ #include "ha_innobase.h"
+ 
++long bug_mode = 1;
++
+ /*
+   Optimize delete of all rows by doing a full generate of the table
+   This will work even if the .ISM and .ISD tables are destroyed
+@@ -106,6 +108,7 @@
+   }
+   if (!error)
+   {
++    if (bug_mode) sleep(2);
+     mysql_update_log.write(thd,thd->query,thd->query_length);
+     if (mysql_bin_log.is_open())
+     {

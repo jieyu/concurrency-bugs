@@ -1,0 +1,26 @@
+diff -Naur mysql-4.0.19-original/sql/ha_innodb.cc mysql-4.0.19-modified/sql/ha_innodb.cc
+--- mysql-4.0.19-original/sql/ha_innodb.cc	2004-05-03 17:10:28.000000000 -0400
++++ mysql-4.0.19-modified/sql/ha_innodb.cc	2009-10-31 01:10:29.000000000 -0400
+@@ -346,6 +346,9 @@
+ 
+ 	if (thd->proc_info) {
+ 		putc(' ', f);
++
++		sleep(1);
++
+ 		fputs(thd->proc_info, f);
+ 	}
+ 
+diff -Naur mysql-4.0.19-original/sql/sql_parse.cc mysql-4.0.19-modified/sql/sql_parse.cc
+--- mysql-4.0.19-original/sql/sql_parse.cc	2004-05-03 17:10:20.000000000 -0400
++++ mysql-4.0.19-modified/sql/sql_parse.cc	2009-10-31 01:12:12.000000000 -0400
+@@ -1310,6 +1310,9 @@
+   thd->proc_info="cleaning up";
+   VOID(pthread_mutex_lock(&LOCK_thread_count)); // For process list
+   thd->proc_info=0;
++
++	sleep(2);
++
+   thd->command=COM_SLEEP;
+   thd->query=0;
+   thread_running--;

@@ -1,0 +1,107 @@
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-4.0.16
+
++---------------------------------------------------------+
+|                                                         |
+| HOW TO INSTALL                                          |
+|                                                         |
++---------------------------------------------------------+
+
+1. Download MySQL-4.0.16 source code
+-------------------------------------------------
+
+# tar zxf mysql-4.0.16.tar.gz
+
+
+2. Apply the patch
+-------------------------------------------------
+
+# cd <mysql-src-base>
+# patch -p1 -i mysql-2011.patch
+
+
+3. Configure MySQL
+-------------------------------------------------
+
+# cd <mysql-src-base>
+# ./configure --prefix=<mysql-install-dir>
+
+if the configuration script complain about not finding
+'LinuxThreads', a trick is needed to bypass this problem
+
+use any editor to open '/usr/include/pthread.h'
+
+add the following line to the end of the file:
+
+------ begin here ------
+
+/* Linuxthreads */
+
+------ end here --------
+
+
+4. Compile and install
+-------------------------------------------------
+
+# make
+# make install
+
+
+5. Post-install configuration
+-------------------------------------------------
+
+first, create user and group for mysql server
+
+# groupadd mysql
+# useradd -g mysql mysql
+
+then, change the directory permission for mysql
+
+# cd <mysql-install-dir>
+# chown mysql -R .
+# chgrp mysql -R .
+
+finally, initialize mysql database
+
+# cd <mysql-install-dir>
+# su mysql
+# bin/mysql_install_db --user=mysql
+
+the above information can also be found on mysql website
+
+
++---------------------------------------------------------+
+|                                                         |
+| REPRODUCE THE BUG                                       |
+|                                                         |
++---------------------------------------------------------+
+
+1. Modify mysql-test/install_test_db
+-------------------------------------------------
+
+# cd <mysql-install-dir>
+# vi mysql-test/install_test_db
+
+Modify Line 10: "execdir=../libexec"
+
+
+2. Trigger bug
+-------------------------------------------------
+
+Run the following test in MySQL's test bench.
+
+# cd <mysql-install-dir>/mysql-test
+# ./mysql-test-run --local rpl_max_relay_size
+
+
+3. Check result
+-------------------------------------------------
+
+If the bug is triggered, you will find the test fails,
+otherwise, the test will success.

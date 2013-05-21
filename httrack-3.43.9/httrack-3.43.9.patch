@@ -1,0 +1,11 @@
+--- httrack-3.43.9-orig/src/htsweb.c	2010-02-20 07:48:58.000000000 -0500
++++ httrack-3.43.9/src/htsweb.c	2011-03-26 23:16:27.150189653 -0400
+@@ -259,6 +259,8 @@
+ 
+ 	/* init */
+ 	hts_init();
++
++  sleep(2);
+   global_opt = opt = hts_create_opt();
+ 
+   /* run */

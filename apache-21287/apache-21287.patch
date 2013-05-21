@@ -1,0 +1,25 @@
+diff -Naur httpd-2.0.48-original/modules/experimental/mod_mem_cache.c httpd-2.0.48-modified/modules/experimental/mod_mem_cache.c
+--- httpd-2.0.48-original/modules/experimental/mod_mem_cache.c	2003-02-03 12:31:37.000000000 -0500
++++ httpd-2.0.48-modified/modules/experimental/mod_mem_cache.c	2009-11-02 23:39:11.000000000 -0500
+@@ -350,10 +350,17 @@
+ 
+     /* Cleanup the cache object */
+ #ifdef USE_ATOMICS
+-    if (!apr_atomic_dec(&obj->refcount)) {
+-        if (obj->cleanup) {
+-            cleanup_cache_object(obj);
+-        }
++    //if (!apr_atomic_dec(&obj->refcount)) {
++    //    if (obj->cleanup) {
++    //        cleanup_cache_object(obj);
++    //    }
++    //}
++    apr_atomic_dec(&obj->refcount);
++    sleep(1);
++    if (!obj->refcount) {
++      if (obj->cleanup) {
++        cleanup_cache_object(obj);
++      }
+     }
+ #else
+     if (sconf->lock) {

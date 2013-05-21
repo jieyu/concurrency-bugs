@@ -1,0 +1,155 @@
+
+Acknowledge: Shan Lu (shanlu@cs.wisc.edu)
+             Haixuan Sun (shx@umich.edu)
+
++--------------------+
+|                    |
+| SUMMARY            |
+|                    |
++--------------------+
+
+A concurrency bug in MySQL-4.0.16
+
+This is a concurrency bug that involves multiple variables
+
++---------------------------------------------------------+
+|                                                         |
+| DETAILS                                                 |
+|                                                         |
++---------------------------------------------------------+
+
+Some details can also be found at:
+http://bugs.mysql.com/bug.php?id=2011
+
+The bug is in function next_event(/sql/slave.cc)
+
+The purpose of this function is to read event from the
+relay log, start reading the next relay log file if the
+current one is finished. There are two different reads, one
+is reading the relay log that is  being written to by the
+I/O thread( it is called hot), the other is reading the
+relay log which has already been rotated, in which case it
+is a normal file that no other threads touches. When  When
+meeting EOF, and the log is not hot, we need to move to the
+relay log in sequence. To know if the next relay log's a hot
+log or a cold log, we can use is_active(); if it is hot, we
+use the I/O cache; if it's cold we open the file normally.
+But if is_active() reports that the log is hot, this may
+change between the test and  the consequence of the test.
+So we may open the I/O cache whereas the log is now cold,
+which will cause program error.
+
+Log_event* next_event(..)
+{
+  ...
+  pthread_mutex_lock(&rli->data_lock);
+  ...
+  //start_while_loop
+  while (!sql_slave_killed(thd,rli)) {
+    ...
+    pthread_mutex_lock(log_lock);
+    ... 
+    //read current log, if succeed, break here.
+    ... 
+    pthread_mutex_unlock(log_lock);
+    ...
+    // read not succeeds, check if it is due to EOF
+      ...
+      //if yes, check if move to next log
+      ...
+        //if yes, check if next log is hot
+        if (rli->relay_log.is_active(rli->linfo.log_file_name)) {
+          rli->cur_log= cur_log= rli->relay_log.get_log_file();
+          rli->cur_log_old_open_count= rli->relay_log.get_open_count();
+
+          if (check_binlog_magic(cur_log,&errmsg)) {
+            goto err;
+          }
+          
+          continue;
+        }
+      ...
+  } //end-while-loop
+}
+
+int queue_event(...)
+{
+  ...
+  pthread_mutex_lock(&mi->data_lock);
+  ...
+  //CASE:ROTATE_EVENT
+  ...
+  procecc_io_rotate(mi,&rev);
+  ...
+  //write log
+  ...
+  pthread_mutex_unlock(&mi->data_lock);
+  ...
+}
+
+The expected behavior is that when sql thread is trying to
+poccess next log, and after calling
+rli->relay_log.is_active() to check it's hot, it is going to
+directly read from the cache_buffer and calls
+check_binlog_magic() to check the magci number. But this
+check may fall because the log file has been rotated by the
+master thread( this is caused by flush_log or the log size
+has reached the log_size_limit), it is no longer hot, which
+will cause program error.
+
+Thread 1                                  Thread 2
+Log_event* next_event(..)                 int queue_event(...)
+{                                         {
+  ...                                       ...
+  pthread_mutex_lock(&rli->data_lock);
+  if (rli->relay_log.is_active(
+          rli->linfo.log_file_name)) {
+    rli->cur_log= cur_log=
+        rli->relay_log.get_log_file();
+                                            pthread_mutex_lock(&mi->data_lock);
+                                            ...
+                                            procecc_io_rotate(mi,&rev);
+                                            ...
+                                            pthread_mutex_unlock(&mi->data_lock);
+
+    if (check_binlog_magic(cur_log,
+                           &errmsg)) {
+      goto err;
+    }
+
+  }
+
+err:
+  pthread_mutex_unlock(&rli->data_lock);
+  ...                                       ...
+}                                         }
+
+If this interleaving happens, when the sql thread tries to
+check the binary log magic number, the master thread has
+rotated the previous log and the log is no longer hot. In
+this case, the sql thread failed in the check_binlog_magic.
+
+To make it simplified, the buggy interleaving is like the
+following:
+
+Thread 1                          Thread 2
+
+Log_event* next_event(...) {      MYSQL_LOG::new_file(...) {
+  ...
+  read relay_log.log_file_name
+  ...
+                                    write log_file_name;
+
+                                    write log_file;
+
+  ...
+  read relay_log.log_file
+  ...
+}
+
+(in slave SQL thread:            (in slave I/O thread:
+exec_relay_log_event ->           queue_event -> relay_log.appendv
+next_event)                       -> new_file)
+
+
+Clearly, this bug is a multi-variable atomicity violation.
